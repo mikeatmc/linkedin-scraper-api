@@ -1,27 +1,27 @@
-import puppeteer from "puppeteer-extra";
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
+import puppeteerExtra from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
-puppeteer.use(StealthPlugin());
+puppeteerExtra.use(StealthPlugin());
 
 export async function scrapeProfile(profileUrl) {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-zygote",
-      "--single-process",
-    ],
+  const browser = await puppeteerExtra.launch({
+    args: chromium.args,
+    defaultViewport: chromium.defaultViewport,
+    executablePath: await chromium.executablePath(),
+    headless: chromium.headless,
   });
 
   const page = await browser.newPage();
-  await page.goto(profileUrl, { waitUntil: "networkidle2" });
+  await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
 
   const name = await page.$eval("h1", el => el.innerText.trim()).catch(() => "");
-  const headline = await page.$eval(".text-body-medium", el => el.innerText.trim()).catch(() => "");
+  const headline = await page
+    .$eval(".text-body-medium", el => el.innerText.trim())
+    .catch(() => "");
 
   await browser.close();
+
   return { name, headline };
 }
