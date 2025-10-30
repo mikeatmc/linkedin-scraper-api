@@ -41,7 +41,7 @@ async function ensureLoggedIn(page, profileUrl) {
       cookies = JSON.parse(fs.readFileSync(cookiePath));
       await page.setCookie(...cookies);
     } catch (err) {
-      console.log("⚠️ Invalid cookies file, re-login...");
+      console.log("⚠️ Invalid cookies, re-login...");
     }
   }
 
@@ -56,7 +56,7 @@ async function ensureLoggedIn(page, profileUrl) {
 }
 
 /**
- * ✅ Render-optimized scraper function
+ * ✅ Render-optimized scraping function
  */
 export async function scrapeProfile(profileUrl) {
   const browser = await puppeteerExtra.launch({
@@ -65,40 +65,38 @@ export async function scrapeProfile(profileUrl) {
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
-      "--single-process",
+      "--disable-gpu",
+      "--no-zygote",
+      "--single-process"
     ],
     defaultViewport: chromium.defaultViewport,
     executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
+    headless: true,
+    ignoreHTTPSErrors: true,
   });
 
   const page = await browser.newPage();
   await ensureLoggedIn(page, profileUrl);
 
-  // Wait for LinkedIn to render profile data
-  await page.waitForSelector(".pv-top-card", { timeout: 30000 }).catch(() => {});
+  await page.waitForSelector(".pv-top-card", { timeout: 40000 }).catch(() => {});
 
   const data = await page.evaluate(() => {
     const name =
       document.querySelector(".pv-text-details__left-panel h1")?.innerText.trim() ||
-      document.querySelector("h1")?.innerText.trim() ||
-      "";
+      document.querySelector("h1")?.innerText.trim() || "";
 
     const headline =
       document.querySelector(".pv-text-details__left-panel .text-body-medium")?.innerText.trim() ||
-      document.querySelector(".text-body-medium")?.innerText.trim() ||
       "";
 
     const location =
-      document.querySelector(".pv-text-details__left-panel .text-body-small")?.innerText.trim() ||
-      document.querySelector(".text-body-small")?.innerText.trim() ||
+      document.querySelector(".pv-text-details__left-panel .text-body-small.inline")?.innerText.trim() ||
       "";
 
     const photo =
       document.querySelector(".pv-top-card-profile-picture__image--show")?.src ||
       document.querySelector(".pv-top-card-profile-picture__image")?.src ||
-      document.querySelector(".pv-top-card img")?.src ||
-      "";
+      document.querySelector(".pv-top-card img")?.src || "";
 
     return { name, headline, location, photo };
   });
