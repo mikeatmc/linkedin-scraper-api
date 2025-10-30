@@ -1,17 +1,18 @@
-import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
+import puppeteer from "puppeteer-core";
 import puppeteerExtra from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fs from "fs";
 import path from "path";
-import dotenv from "dotenv";
+import "dotenv/config";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 puppeteerExtra.use(StealthPlugin());
 
-const cookiePath = path.join(process.cwd(), "cookies.json");
+const cookiePath = path.join(__dirname, "cookies.json");
 
-/** 🔐 Login and save cookies */
 async function loginAndSaveCookies(page) {
   console.log("🔐 Logging into LinkedIn...");
   await page.goto("https://www.linkedin.com/login", {
@@ -25,9 +26,7 @@ async function loginAndSaveCookies(page) {
 
   try {
     await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 });
-  } catch {
-    console.log("⚠️ Login redirect timeout, continuing...");
-  }
+  } catch {}
 
   const cookies = await page.cookies();
   fs.writeFileSync(cookiePath, JSON.stringify(cookies, null, 2));
@@ -35,73 +34,73 @@ async function loginAndSaveCookies(page) {
   return cookies;
 }
 
-/** 👤 Ensure logged in before visiting profile */
 async function ensureLoggedIn(page, profileUrl) {
-  let needLogin = false;
-
-  if (!fs.existsSync(cookiePath)) {
-    needLogin = true;
-  } else {
+  let cookies = [];
+  if (fs.existsSync(cookiePath)) {
     try {
-      const cookies = JSON.parse(fs.readFileSync(cookiePath));
-      if (!cookies.length) needLogin = true;
-      else await page.setCookie(...cookies);
-    } catch {
-      needLogin = true;
+      cookies = JSON.parse(fs.readFileSync(cookiePath));
+      await page.setCookie(...cookies);
+    } catch (err) {
+      console.log("⚠️ Invalid cookies file, re-login...");
     }
   }
-
-  if (needLogin) await loginAndSaveCookies(page);
 
   await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   if (page.url().includes("/login")) {
-    console.log("⚠️ Session expired, re-logging in...");
-    const cookies = await loginAndSaveCookies(page);
-    await page.setCookie(...cookies);
-    await page.goto(profileUrl, { waitUntil: "networkidle2" });
+    await loginAndSaveCookies(page);
+    const newCookies = JSON.parse(fs.readFileSync(cookiePath));
+    await page.setCookie(...newCookies);
+    await page.goto(profileUrl, { waitUntil: "networkidle2", timeout: 60000 });
   }
 }
 
-/** 🧠 Scrape LinkedIn profile info */
+/**
+ * ✅ Render-optimized scraper function
+ */
 export async function scrapeProfile(profileUrl) {
-  const executablePath = await chromium.executablePath();
-
   const browser = await puppeteerExtra.launch({
-    args: chromium.args,
+    args: [
+      ...chromium.args,
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--single-process",
+    ],
     defaultViewport: chromium.defaultViewport,
-    executablePath: executablePath,
+    executablePath: await chromium.executablePath(),
     headless: chromium.headless,
   });
 
   const page = await browser.newPage();
   await ensureLoggedIn(page, profileUrl);
 
-  // Wait for profile header
+  // Wait for LinkedIn to render profile data
   await page.waitForSelector(".pv-top-card", { timeout: 30000 }).catch(() => {});
 
   const data = await page.evaluate(() => {
-    const safeText = (selector) =>
-      document.querySelector(selector)?.innerText?.trim() || "";
-    const safeSrc = (selector) =>
-      document.querySelector(selector)?.src?.trim() || "";
+    const name =
+      document.querySelector(".pv-text-details__left-panel h1")?.innerText.trim() ||
+      document.querySelector("h1")?.innerText.trim() ||
+      "";
 
-    return {
-      name:
-        safeText(".pv-top-card h1") ||
-        safeText(".text-heading-xlarge") ||
-        safeText(".top-card-layout__title"),
-      headline:
-        safeText(".pv-text-details__left-panel .text-body-medium") ||
-        safeText(".top-card-layout__headline"),
-      location:
-        safeText(".pv-text-details__left-panel .text-body-small.inline.t-black--light.break-words") ||
-        safeText(".top-card__subline-item"),
-      photo:
-        safeSrc("img.pv-top-card-profile-picture__image") ||
-        safeSrc("img.profile-photo-edit__preview") ||
-        safeSrc(".pv-top-card__photo img"),
-    };
+    const headline =
+      document.querySelector(".pv-text-details__left-panel .text-body-medium")?.innerText.trim() ||
+      document.querySelector(".text-body-medium")?.innerText.trim() ||
+      "";
+
+    const location =
+      document.querySelector(".pv-text-details__left-panel .text-body-small")?.innerText.trim() ||
+      document.querySelector(".text-body-small")?.innerText.trim() ||
+      "";
+
+    const photo =
+      document.querySelector(".pv-top-card-profile-picture__image--show")?.src ||
+      document.querySelector(".pv-top-card-profile-picture__image")?.src ||
+      document.querySelector(".pv-top-card img")?.src ||
+      "";
+
+    return { name, headline, location, photo };
   });
 
   await browser.close();
