@@ -4,98 +4,131 @@ import puppeteerExtra from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import fs from "fs";
 import path from "path";
-import "dotenv/config";
+import dotenv from "dotenv";
 import { fileURLToPath } from "url";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-puppeteerExtra.use(StealthPlugin());
-
 const cookiePath = path.join(__dirname, "cookies.json");
 
+puppeteerExtra.use(StealthPlugin());
+
+/* -----------------------------------
+   🔐 Login Logic (forced real login)
+----------------------------------- */
 async function loginAndSaveCookies(page) {
   console.log("🔐 Logging into LinkedIn...");
+
   await page.goto("https://www.linkedin.com/login", {
     waitUntil: "networkidle2",
     timeout: 60000,
   });
 
-  await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 50 });
-  await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 50 });
+  await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 75 });
+  await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 75 });
   await page.click('button[type="submit"]');
 
-  try {
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 });
-  } catch {}
+  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+
+  // Retry if redirected to login again
+  if (page.url().includes("/login") || page.url().includes("/checkpoint")) {
+    console.log("⚠️ Login not successful, retrying...");
+    await page.goto("https://www.linkedin.com/login", { waitUntil: "networkidle2" });
+    await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 75 });
+    await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 75 });
+    await page.click('button[type="submit"]');
+    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+  }
 
   const cookies = await page.cookies();
   fs.writeFileSync(cookiePath, JSON.stringify(cookies, null, 2));
-  console.log("✅ Cookies saved.");
+  console.log("✅ Cookies saved successfully.");
   return cookies;
 }
 
+/* -----------------------------------
+   🔁 Ensure Logged In with Cookie Fallback
+----------------------------------- */
 async function ensureLoggedIn(page, profileUrl) {
-  let cookies = [];
   if (fs.existsSync(cookiePath)) {
     try {
-      cookies = JSON.parse(fs.readFileSync(cookiePath));
+      const cookies = JSON.parse(fs.readFileSync(cookiePath));
       await page.setCookie(...cookies);
-    } catch (err) {
-      console.log("⚠️ Invalid cookies, re-login...");
+      console.log("✅ Loaded cookies from file.");
+    } catch {
+      console.log("⚠️ Invalid cookies, re-login required.");
+      await loginAndSaveCookies(page);
     }
+  } else {
+    await loginAndSaveCookies(page);
   }
 
   await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   if (page.url().includes("/login")) {
+    console.log("🔁 Re-login detected...");
     await loginAndSaveCookies(page);
-    const newCookies = JSON.parse(fs.readFileSync(cookiePath));
-    await page.setCookie(...newCookies);
+    const cookies = JSON.parse(fs.readFileSync(cookiePath));
+    await page.setCookie(...cookies);
     await page.goto(profileUrl, { waitUntil: "networkidle2", timeout: 60000 });
   }
 }
 
-/**
- * ✅ Render-optimized scraping function
- */
+/* -----------------------------------
+   🧠 Scrape LinkedIn Profile
+----------------------------------- */
 export async function scrapeProfile(profileUrl) {
-  console.log("Launching Chromium...");
-  const executablePath = await chromium.executablePath();
-  console.log("Using Chromium path:", executablePath);
+  console.log("🚀 Launching Chromium...");
+  const executablePath = await chromium.executablePath;
+
   const browser = await puppeteerExtra.launch({
-    args: chromium.args,
+    headless: true,
+    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
     defaultViewport: chromium.defaultViewport,
     executablePath,
-    headless: true,
-    ignoreHTTPSErrors: true,
   });
 
   const page = await browser.newPage();
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+  );
+
   await ensureLoggedIn(page, profileUrl);
 
-  await page.waitForSelector(".pv-top-card", { timeout: 40000 }).catch(() => {});
+  await page.waitForSelector(".pv-top-card", { timeout: 20000 }).catch(() => {});
 
   const data = await page.evaluate(() => {
-    const name =
-      document.querySelector(".pv-text-details__left-panel h1")?.innerText.trim() ||
-      document.querySelector("h1")?.innerText.trim() || "";
+    const getText = (sel) => document.querySelector(sel)?.innerText?.trim() || "";
+    const getAttr = (sel, attr) => document.querySelector(sel)?.getAttribute(attr) || "";
 
-    const headline =
-      document.querySelector(".pv-text-details__left-panel .text-body-medium")?.innerText.trim() ||
-      "";
-
-    const location =
-      document.querySelector(".pv-text-details__left-panel .text-body-small.inline")?.innerText.trim() ||
-      "";
-
-    const photo =
-      document.querySelector(".pv-top-card-profile-picture__image--show")?.src ||
-      document.querySelector(".pv-top-card-profile-picture__image")?.src ||
-      document.querySelector(".pv-top-card img")?.src || "";
-
-    return { name, headline, location, photo };
+    return {
+      name:
+        getText("h1") ||
+        getText(".text-heading-xlarge") ||
+        getText(".pv-text-details__left-panel h1"),
+      headline:
+        getText(".text-body-medium.break-words") ||
+        getText(".pv-text-details__left-panel div"),
+      location:
+        getText(".pb2.pv-text-details__left-panel.text-body-small.inline.t-black--light.break-words") ||
+        getText(".pv-top-card--list-bullet li"),
+      photo:
+        getAttr(".pv-top-card-profile-picture__image--show", "src") ||
+        getAttr(".pv-top-card-profile-picture__image", "src") ||
+        getAttr(".pv-top-card__photo img", "src") ||
+        getAttr(".profile-photo-edit__preview", "src"),
+    };
   });
 
   await browser.close();
-  return data;
+
+  console.log("✅ Scraping complete!");
+  return {
+    name: data.name || "",
+    headline: data.headline || "",
+    location: data.location || "",
+    photo: data.photo || "",
+  };
 }
