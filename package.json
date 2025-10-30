@@ -1,8 +1,8 @@
 {
   "name": "linkedin-scraper-api",
   "version": "1.0.0",
-  "type": "module",
   "main": "server.js",
+  "type": "module",
   "dependencies": {
     "express": "^4.19.2",
     "dotenv": "^16.4.1",
@@ -10,8 +10,5 @@
     "@sparticuz/chromium": "^119.0.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.1"
-  },
-  "scripts": {
-    "start": "node server.js"
   }
 }
