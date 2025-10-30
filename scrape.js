@@ -85,7 +85,7 @@ export async function scrapeProfile(profileUrl) {
 
   const browser = await puppeteerExtra.launch({
     headless: true,
-    args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
+    args: [chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
     defaultViewport: chromium.defaultViewport,
     executablePath,
   });
