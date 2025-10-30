@@ -15,43 +15,29 @@ const cookiePath = path.join(__dirname, "cookies.json");
 async function loginLinkedIn(page) {
   console.log("🔐 Logging into LinkedIn...");
   await page.goto("https://www.linkedin.com/login", { waitUntil: "networkidle2" });
-
   await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 50 });
   await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 50 });
-
   await Promise.all([
     page.click('button[type="submit"]'),
     page.waitForNavigation({ waitUntil: "networkidle2" }),
   ]);
-
   const cookies = await page.cookies();
   fs.writeFileSync(cookiePath, JSON.stringify(cookies, null, 2));
-  console.log("✅ New cookies saved successfully!");
+  console.log("✅ Cookies saved.");
   return cookies;
 }
 
 async function useCookies(page) {
-  console.log("🍪 Checking for existing cookies...");
-  if (!fs.existsSync(cookiePath)) {
-    console.log("⚠️ No cookies.json file found.");
-    return null;
-  }
-
+  if (!fs.existsSync(cookiePath)) return null;
   const cookies = JSON.parse(fs.readFileSync(cookiePath));
-  if (!cookies || cookies.length === 0) {
-    console.log("⚠️ cookies.json is empty — need to log in again.");
-    return null;
-  }
-
+  if (!cookies.length) return null;
   await page.setCookie(...cookies);
-  console.log(`✅ Loaded ${cookies.length} cookies from file.`);
   return cookies;
 }
 
 export async function scrapeProfile(profileUrl) {
   console.log("🚀 Launching Chromium...");
   const executablePath = await chromium.executablePath();
-
   const browser = await puppeteerExtra.launch({
     args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
     defaultViewport: chromium.defaultViewport,
@@ -67,28 +53,24 @@ export async function scrapeProfile(profileUrl) {
       "Chrome/120.0.0.0 Safari/537.36"
   );
 
-  let cookies = await useCookies(page);
-  if (!cookies) {
-    console.log("🔄 No valid cookies — performing LinkedIn login...");
-    cookies = await loginLinkedIn(page);
-  } else {
-    console.log("✅ Using existing cookies — skipping login.");
-  }
+  const cookies = await useCookies(page);
+  if (!cookies) await loginLinkedIn(page);
 
   console.log("🌐 Opening profile:", profileUrl);
   await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 90000 });
 
-  // If redirected to login, re-login and re-save cookies
+  // If redirected to login, re-login and retry
   if (page.url().includes("/login")) {
-    console.log("🔁 Session expired — need to re-login.");
+    console.log("🔁 Session expired, re-logging in...");
     await loginLinkedIn(page);
     await page.goto(profileUrl, { waitUntil: "domcontentloaded" });
   }
 
+  // Wait until the main profile info is visible
   try {
     await page.waitForSelector("h1", { timeout: 30000 });
   } catch {
-    console.log("⚠️ Couldn't find profile name; reloading...");
+    console.log("⚠️ Profile name not found; retrying...");
     await page.reload({ waitUntil: "networkidle2" });
     await page.waitForSelector("h1", { timeout: 30000 });
   }
@@ -106,8 +88,6 @@ export async function scrapeProfile(profileUrl) {
     return { name, headline, location, photo };
   });
 
-  console.log("📦 Scraped Data:", data);
   await browser.close();
-  console.log("✅ Browser closed successfully.");
   return data;
 }
