@@ -11,9 +11,7 @@ puppeteerExtra.use(StealthPlugin());
 
 const cookiePath = path.join(process.cwd(), "cookies.json");
 
-/**
- * Login and save cookies
- */
+/** 🔐 Login and save cookies */
 async function loginAndSaveCookies(page) {
   console.log("🔐 Logging into LinkedIn...");
   await page.goto("https://www.linkedin.com/login", {
@@ -37,9 +35,7 @@ async function loginAndSaveCookies(page) {
   return cookies;
 }
 
-/**
- * Load cookies or perform login if needed
- */
+/** 👤 Ensure logged in before visiting profile */
 async function ensureLoggedIn(page, profileUrl) {
   let needLogin = false;
 
@@ -67,9 +63,7 @@ async function ensureLoggedIn(page, profileUrl) {
   }
 }
 
-/**
- * Exported scrape function
- */
+/** 🧠 Scrape LinkedIn profile info */
 export async function scrapeProfile(profileUrl) {
   const executablePath = await chromium.executablePath();
 
@@ -83,22 +77,31 @@ export async function scrapeProfile(profileUrl) {
   const page = await browser.newPage();
   await ensureLoggedIn(page, profileUrl);
 
+  // Wait for profile header
+  await page.waitForSelector(".pv-top-card", { timeout: 30000 }).catch(() => {});
+
   const data = await page.evaluate(() => {
-    const name =
-      document.querySelector("h1")?.innerText?.trim() ||
-      document.querySelector(".top-card-layout__title")?.innerText?.trim() ||
-      "";
-    const headline =
-      document.querySelector(".text-body-medium")?.innerText?.trim() ||
-      document.querySelector(".top-card-layout__headline")?.innerText?.trim() ||
-      "";
-    const location =
-      document.querySelector(".top-card__subline-item")?.innerText?.trim() || "";
-    const photo =
-      document.querySelector(
-        ".pv-top-card-profile-picture__image, img.profile-photo-edit__preview"
-      )?.src || "";
-    return { name, headline, location, photo };
+    const safeText = (selector) =>
+      document.querySelector(selector)?.innerText?.trim() || "";
+    const safeSrc = (selector) =>
+      document.querySelector(selector)?.src?.trim() || "";
+
+    return {
+      name:
+        safeText(".pv-top-card h1") ||
+        safeText(".text-heading-xlarge") ||
+        safeText(".top-card-layout__title"),
+      headline:
+        safeText(".pv-text-details__left-panel .text-body-medium") ||
+        safeText(".top-card-layout__headline"),
+      location:
+        safeText(".pv-text-details__left-panel .text-body-small.inline.t-black--light.break-words") ||
+        safeText(".top-card__subline-item"),
+      photo:
+        safeSrc("img.pv-top-card-profile-picture__image") ||
+        safeSrc("img.profile-photo-edit__preview") ||
+        safeSrc(".pv-top-card__photo img"),
+    };
   });
 
   await browser.close();
