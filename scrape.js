@@ -1,23 +1,25 @@
-import chromium from "@sparticuz/chromium";
-import puppeteer from "puppeteer-core";
+// scrape.js
 import puppeteerExtra from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import chromium from "@sparticuz/chromium";
 import fs from "fs";
 import path from "path";
 import dotenv from "dotenv";
 import { fileURLToPath } from "url";
+import { execSync } from "child_process";
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const cookiePath = path.join(__dirname, "cookies.json");
 
 puppeteerExtra.use(StealthPlugin());
 
-/* -----------------------------------
-   🔐 Login Logic (forced real login)
------------------------------------ */
+const cookiePath = path.join(__dirname, "cookies.json");
+
+// ----------------------------
+// LOGIN + COOKIE HELPERS
+// ----------------------------
 async function loginAndSaveCookies(page) {
   console.log("🔐 Logging into LinkedIn...");
 
@@ -26,62 +28,71 @@ async function loginAndSaveCookies(page) {
     timeout: 60000,
   });
 
-  await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 75 });
-  await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 75 });
+  await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 50 });
+  await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 50 });
   await page.click('button[type="submit"]');
 
-  await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
-
-  // Retry if redirected to login again
-  if (page.url().includes("/login") || page.url().includes("/checkpoint")) {
-    console.log("⚠️ Login not successful, retrying...");
-    await page.goto("https://www.linkedin.com/login", { waitUntil: "networkidle2" });
-    await page.type("#username", process.env.LINKEDIN_EMAIL, { delay: 75 });
-    await page.type("#password", process.env.LINKEDIN_PASSWORD, { delay: 75 });
-    await page.click('button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: "networkidle2", timeout: 60000 }).catch(() => {});
+  try {
+    await page.waitForFunction(
+      () => window.location.pathname.startsWith("/feed"),
+      { timeout: 60000 }
+    );
+  } catch {
+    await page.waitForSelector("#global-nav", { timeout: 15000 });
   }
 
   const cookies = await page.cookies();
   fs.writeFileSync(cookiePath, JSON.stringify(cookies, null, 2));
-  console.log("✅ Cookies saved successfully.");
+  console.log("✅ Cookies saved.");
   return cookies;
 }
 
-/* -----------------------------------
-   🔁 Ensure Logged In with Cookie Fallback
------------------------------------ */
 async function ensureLoggedIn(page, profileUrl) {
-  if (fs.existsSync(cookiePath)) {
+  let needLogin = false;
+
+  if (!fs.existsSync(cookiePath)) {
+    needLogin = true;
+  } else {
     try {
       const cookies = JSON.parse(fs.readFileSync(cookiePath));
-      await page.setCookie(...cookies);
-      console.log("✅ Loaded cookies from file.");
+      if (!cookies.length) needLogin = true;
+      else await page.setCookie(...cookies);
     } catch {
-      console.log("⚠️ Invalid cookies, re-login required.");
-      await loginAndSaveCookies(page);
+      needLogin = true;
     }
-  } else {
-    await loginAndSaveCookies(page);
   }
+
+  if (needLogin) await loginAndSaveCookies(page);
 
   await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
 
   if (page.url().includes("/login")) {
-    console.log("🔁 Re-login detected...");
-    await loginAndSaveCookies(page);
-    const cookies = JSON.parse(fs.readFileSync(cookiePath));
+    const cookies = await loginAndSaveCookies(page);
     await page.setCookie(...cookies);
-    await page.goto(profileUrl, { waitUntil: "networkidle2", timeout: 60000 });
+    await page.goto(profileUrl, { waitUntil: "domcontentloaded", timeout: 60000 });
   }
 }
 
-/* -----------------------------------
-   🧠 Scrape LinkedIn Profile
------------------------------------ */
+// ----------------------------
+// MAIN SCRAPER FUNCTION
+// ----------------------------
 export async function scrapeProfile(profileUrl) {
   console.log("🚀 Launching Chromium...");
-  const executablePath = await chromium.executablePath;
+
+  let executablePath;
+  try {
+    executablePath = await chromium.executablePath();
+    console.log("✅ Using Chromium binary:", executablePath);
+  } catch (err) {
+    console.warn("⚠️ Failed to load @sparticuz/chromium. Falling back to system Chrome.");
+    try {
+      const fallback = execSync("which google-chrome || which chromium").toString().trim();
+      executablePath = fallback || "/usr/bin/google-chrome";
+      console.log("✅ Fallback Chrome path:", executablePath);
+    } catch {
+      executablePath = "/usr/bin/google-chrome";
+    }
+  }
 
   const browser = await puppeteerExtra.launch({
     headless: true,
@@ -91,44 +102,14 @@ export async function scrapeProfile(profileUrl) {
   });
 
   const page = await browser.newPage();
-  await page.setUserAgent(
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-  );
-
   await ensureLoggedIn(page, profileUrl);
 
-  await page.waitForSelector(".pv-top-card", { timeout: 20000 }).catch(() => {});
-
-  const data = await page.evaluate(() => {
-    const getText = (sel) => document.querySelector(sel)?.innerText?.trim() || "";
-    const getAttr = (sel, attr) => document.querySelector(sel)?.getAttribute(attr) || "";
-
-    return {
-      name:
-        getText("h1") ||
-        getText(".text-heading-xlarge") ||
-        getText(".pv-text-details__left-panel h1"),
-      headline:
-        getText(".text-body-medium.break-words") ||
-        getText(".pv-text-details__left-panel div"),
-      location:
-        getText(".pb2.pv-text-details__left-panel.text-body-small.inline.t-black--light.break-words") ||
-        getText(".pv-top-card--list-bullet li"),
-      photo:
-        getAttr(".pv-top-card-profile-picture__image--show", "src") ||
-        getAttr(".pv-top-card-profile-picture__image", "src") ||
-        getAttr(".pv-top-card__photo img", "src") ||
-        getAttr(".profile-photo-edit__preview", "src"),
-    };
-  });
+  // Extract profile data
+  const name = await page.$eval("h1", el => el.innerText.trim()).catch(() => "");
+  const headline = await page.$eval(".text-body-medium.break-words", el => el.innerText.trim()).catch(() => "");
+  const location = await page.$eval(".text-body-small.inline.t-black--light.break-words", el => el.innerText.trim()).catch(() => "");
+  const photo = await page.$eval("img.pv-top-card-profile-picture__image, .pv-top-card__photo img", el => el.src).catch(() => "");
 
   await browser.close();
-
-  console.log("✅ Scraping complete!");
-  return {
-    name: data.name || "",
-    headline: data.headline || "",
-    location: data.location || "",
-    photo: data.photo || "",
-  };
+  return { name, headline, location, photo };
 }
