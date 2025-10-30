@@ -2,20 +2,11 @@ import puppeteer from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import puppeteerExtra from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 
 puppeteerExtra.use(StealthPlugin());
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const cookiePath = path.join(__dirname, "cookies.json");
-
 export async function scrapeProfile(profileUrl) {
   console.log("🚀 Launching Chromium...");
-
-  // 🔧 get correct binary path
   const executablePath = await chromium.executablePath();
 
   const browser = await puppeteerExtra.launch({
@@ -27,9 +18,28 @@ export async function scrapeProfile(profileUrl) {
   });
 
   const page = await browser.newPage();
-  await page.goto(profileUrl, { waitUntil: "networkidle2", timeout: 60000 });
 
-  // Scrape data
+  // Make it look more like a real browser
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+    "AppleWebKit/537.36 (KHTML, like Gecko) " +
+    "Chrome/120.0.0.0 Safari/537.36"
+  );
+
+  try {
+    console.log("🌐 Opening LinkedIn profile...");
+    await page.goto(profileUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 120000,
+    });
+  } catch (err) {
+    console.log("⚠️ Retry loading page...");
+    await page.goto(profileUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 120000,
+    });
+  }
+
   const data = await page.evaluate(() => {
     const name = document.querySelector("h1")?.innerText?.trim() || "";
     const headline =
