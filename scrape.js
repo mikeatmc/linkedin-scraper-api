@@ -59,18 +59,13 @@ async function ensureLoggedIn(page, profileUrl) {
  * ✅ Render-optimized scraping function
  */
 export async function scrapeProfile(profileUrl) {
+  console.log("Launching Chromium...");
+  const executablePath = await chromium.executablePath();
+  console.log("Using Chromium path:", executablePath);
   const browser = await puppeteerExtra.launch({
-    args: [
-      ...chromium.args,
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--no-zygote",
-      "--single-process"
-    ],
+    args: chromium.args,
     defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
+    executablePath,
     headless: true,
     ignoreHTTPSErrors: true,
   });
